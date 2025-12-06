@@ -1,0 +1,2778 @@
+// ---- QUOTES OF THE DAY ----
+const quotes = [
+  {
+    text: "You are not behind; you are right on your own schedule.",
+    category: "Timing",
+  },        
+
+  {
+    text: "Your energy is learning how to choose peace more often.",
+    category: "Peace",
+  },
+  {
+    text: "Even small shifts in your routine are big wins for your future self.",
+    category: "Habits",
+  },
+  {
+    text: "You don’t have to be perfect to be worthy of good things.",
+    category: "Worth",
+  },
+  {
+    text: "You are allowed to rest without feeling like you are falling apart.",
+    category: "Rest",
+  },
+  {
+    text: "Your glow-up is rooted in how gently you treat yourself today.",
+    category: "Glow-Up",
+  },
+  {
+    text: "You are building a life that feels like home inside your body.",
+    category: "Healing",
+  },
+  {
+    text: "Your courage to continue is more powerful than any delay.",
+    category: "Courage",
+  },
+];
+
+let currentAffirmations = [];
+let currentMood = "";
+let currentFocus = "";
+let currentJournalIndex = null;
+let journalTitle = "";
+let editingExistingEntry = false;
+let currentUser = null;
+let isAuthenticated = false;
+let apiKey = null;
+let supabaseClient = null;
+let journalCache = [];
+let habitCache = [];
+const SUPA_URL = "https://hqffwliyyplpmvplhmac.supabase.co";
+const SUPA_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhxZmZ3bGl5eXBscG12cGxobWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ2NTkyODYsImV4cCI6MjA4MDIzNTI4Nn0.yaHS0oIg2zQha3TUMKnCabP3Pcn2Fp83M9v5rB3Df6w";
+const AI_PROXY_URL = ""; // Set to your Supabase Edge Function URL for safe AI calls (e.g., https://<project>.functions.supabase.co/ai-proxy)
+const journalPrompts = [
+  { key: "honest", label: "One honest sentence" },
+  { key: "win", label: "One thing you are grateful for today" },
+  { key: "friend", label: "What would you say to yourself as a friend?" },
+];
+let journalResponses = {
+  honest: "",
+  win: "",
+  friend: "",
+};
+let currentJournalPromptIndex = 0;
+let journalMood = "Calm";
+let journalFocus = "Healing";
+
+function setQuoteOfDay() {
+  const now = new Date();
+  const startOfYear = new Date(now.getFullYear(), 0, 0);
+  const dayOfYear = Math.floor((now - startOfYear) / 86400000);
+  const index = dayOfYear % quotes.length;
+  const q = quotes[index];
+
+  document.getElementById("quoteText").textContent = q.text;
+  document.getElementById("quoteCategory").textContent =
+    q.category + " • Daily message";
+}
+
+// ---- NAVIGATION ----
+function showScreen(screen) {
+  const screens = ["home", "affirm", "journal", "habit", "settings"];
+
+  screens.forEach((name) => {
+    const el = document.getElementById(`screen-${name}`);
+    if (name === screen) el.classList.remove("hidden");
+    else el.classList.add("hidden");
+  });
+
+  document
+    .querySelectorAll(".nav-btn")
+    .forEach((btn) => btn.classList.remove("active"));
+  const activeBtn = document.querySelector(
+    `.nav-btn[data-screen="${screen}"]`
+  );
+  if (activeBtn) activeBtn.classList.add("active");
+}
+
+// ---- AFFIRMATIONS (MOCK FOR NOW) ----
+function generateAffirmationsMock() {
+  const moodSelect = document.getElementById("moodSelect");
+  const focusSelect = document.getElementById("focusSelect");
+  const moodInput = document.getElementById("customMoodInput");
+  const focusInput = document.getElementById("customFocusInput");
+
+  const mood =
+    moodSelect.value === "custom" && moodInput.value.trim()
+      ? moodInput.value.trim()
+      : moodSelect.value;
+  const focus =
+    focusSelect.value === "custom" && focusInput.value.trim()
+      ? focusInput.value.trim()
+      : focusSelect.value;
+
+  setSharedMood(mood);
+  setSharedFocus(focus);
+  const container = document.getElementById("affirmationsList");
+  container.innerHTML = "";
+
+  const sample = [
+    `Even in a ${mood.toLowerCase()} season, you are still worthy of ${focus.toLowerCase()} and ease.`,
+    `Your spirit is quietly rearranging things so you can receive more ${focus.toLowerCase()} than you imagined.`,
+    `Every small choice you make today is pulling you closer to the ${focus.toLowerCase()} you’ve been asking for.`,
+  ];
+
+  currentAffirmations = sample;
+
+  sample.forEach((line) => {
+    const p = document.createElement("p");
+    p.textContent = line;
+    container.appendChild(p);
+  });
+}
+
+async function generateAffirmationsAI() {
+  const container = document.getElementById("affirmationsList");
+  container.innerHTML = "<p>Generating...</p>";
+  if (!apiKey) {
+    generateAffirmationsMock();
+    return;
+  }
+  try {
+    const mood =
+      (document.getElementById("customMoodInput").value.trim() ||
+        document.getElementById("moodSelect").value) || "you";
+    const focus =
+      (document.getElementById("customFocusInput").value.trim() ||
+        document.getElementById("focusSelect").value) || "growth";
+
+    const messages = [
+      {
+        role: "system",
+        content:
+          "You are AffirmFlow AI. Write 3 concise, uplifting affirmations (separate lines) tailored to the user's mood and focus. Keep each under 18 words.",
+      },
+      {
+        role: "user",
+        content: `Mood: ${mood}. Focus: ${focus}. Make them warm, specific, and encouraging.`,
+      },
+    ];
+
+    const result = await callOpenAI(messages);
+    const lines = result
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .slice(0, 3);
+
+    if (!lines.length) throw new Error("Empty response");
+
+    currentAffirmations = lines;
+    container.innerHTML = "";
+    lines.forEach((line) => {
+      const p = document.createElement("p");
+      p.textContent = line;
+      container.appendChild(p);
+    });
+  } catch (err) {
+    console.error(err);
+    container.innerHTML =
+      "<p>Using backup affirmations (AI unavailable right now).</p>";
+    generateAffirmationsMock();
+  }
+}
+
+function saveAffirmationsToJournal() {
+  if (!currentAffirmations.length) {
+    alert("Generate affirmations first.");
+    return;
+  }
+
+  const { history, index: idx, todayStr } = ensureActiveJournalEntry();
+  const affirmText = currentAffirmations.join(" | ");
+  const entry = history[idx] || {};
+  const merged = mergeSection(entry, "Affirmation of the Day:", affirmText);
+  const updated = {
+    ...entry,
+    title: entry.title || journalTitle || "Affirmation of the Day",
+    raw: merged.raw,
+    ai: merged.ai,
+    date: entry.date || new Date().toLocaleString(),
+    entryDate: entry.entryDate || todayStr,
+    mood: currentMood,
+    focus: currentFocus,
+  };
+  history[idx] = updated;
+  currentJournalIndex = idx;
+  journalTitle = updated.title;
+  editingExistingEntry = true;
+
+  setJournalData(history);
+  loadJournalHistory();
+  showScreen("journal");
+
+  syncJournalOutput(updated);
+}
+
+function handleMoodChange() {
+  const select = document.getElementById("moodSelect");
+  const input = document.getElementById("customMoodInput");
+  const isCustom = select.value === "custom";
+  input.classList.toggle("hidden", !isCustom);
+  const value = isCustom ? input.value.trim() : select.value;
+  setSharedMood(value);
+  if (!isCustom) input.value = "";
+}
+
+function handleFocusChange() {
+  const select = document.getElementById("focusSelect");
+  const input = document.getElementById("customFocusInput");
+  const isCustom = select.value === "custom";
+  input.classList.toggle("hidden", !isCustom);
+  const value = isCustom ? input.value.trim() : select.value;
+  setSharedFocus(value);
+  if (!isCustom) input.value = "";
+}
+
+// ---- JOURNAL (MOCK + HISTORY) ----
+function loadJournalHistory() {
+  const history = getJournalData();
+  const container = document.getElementById("journalHistory");
+  container.innerHTML = "";
+  if (!history.length) return;
+
+  if (currentJournalIndex === null) {
+    currentJournalIndex = history.length - 1;
+  }
+
+  history
+    .slice(-5)
+    .reverse()
+    .forEach((item, idx) => {
+      const row = document.createElement("div");
+      row.className = "journal-history-item";
+
+      const text = document.createElement("span");
+      const moodFocus =
+        item.mood && item.focus
+          ? ` • Mood: ${item.mood} • Focus: ${item.focus}`
+          : "";
+      const titleText = item.title ? ` • Title: ${item.title}` : "";
+      text.textContent = `${item.date}${titleText} • ${item.ai}${moodFocus}`;
+
+      const buttons = document.createElement("div");
+      buttons.style.display = "inline-flex";
+      buttons.style.gap = "6px";
+      const openBtn = document.createElement("button");
+      openBtn.className = "btn btn-ghost";
+      openBtn.textContent = "Open";
+      const globalIndex = history.length - 1 - idx;
+      openBtn.onclick = () => loadJournalEntryByIndex(globalIndex);
+
+      const delBtn = document.createElement("button");
+      delBtn.className = "btn btn-ghost";
+      delBtn.textContent = "Delete";
+      delBtn.onclick = (e) => {
+        e.stopPropagation();
+        deleteJournalEntry(globalIndex);
+      };
+
+      buttons.appendChild(openBtn);
+      buttons.appendChild(delBtn);
+      row.appendChild(text);
+      row.appendChild(buttons);
+      container.appendChild(row);
+    });
+}
+
+function transformJournalMock() {
+  captureCurrentJournalPrompt();
+  const { honest, win, friend } = journalResponses;
+  const out = document.getElementById("journalOutput");
+
+  if (!honest && !win && !friend) {
+    out.innerHTML =
+      "<p>Start with one honest sentence about how you feel.</p>";
+    return;
+  }
+
+  const aiText =
+    "You are allowed to feel exactly how you feel and still be worthy of softness, progress, and peace. Nothing about this moment cancels your growth.";
+
+  out.innerHTML = `
+    <p><strong>Title:</strong> ${journalTitle || "Untitled"}</p>
+    <p><strong>Mood:</strong> ${journalMood || "—"} • <strong>Focus:</strong> ${journalFocus || "—"}</p>
+    <p><strong>Honest:</strong> ${honest || "—"}</p>
+    <p><strong>Grateful:</strong> ${win || "—"}</p>
+    <p><strong>Friend note:</strong> ${friend || "—"}</p>
+    <p>${aiText}</p>
+  `;
+
+  const { history, index: idx, todayStr } = ensureActiveJournalEntry();
+  const combinedRaw = combineJournalInputs({ honest, win, friend });
+  const entry = history[idx] || {};
+  const merged = mergeSection(entry, "Reflection:", combinedRaw + `\n${aiText}`);
+  history[idx] = {
+    ...entry,
+    title: journalTitle || entry.title || "Untitled",
+    raw: merged.raw,
+    ai: merged.ai,
+    date: entry.date || new Date().toLocaleString(),
+    entryDate: entry.entryDate || todayStr,
+    mood: journalMood,
+    focus: journalFocus,
+  };
+  currentJournalIndex = idx;
+  editingExistingEntry = true;
+  setJournalData(history);
+  loadJournalHistory();
+  resetJournalInputs();
+}
+
+async function transformJournalAI() {
+  captureCurrentJournalPrompt();
+  const { honest, win, friend } = journalResponses;
+  const out = document.getElementById("journalOutput");
+
+  if (!honest && !win && !friend) {
+    out.innerHTML =
+      "<p>Start with one honest sentence about how you feel.</p>";
+    return;
+  }
+
+  if (!apiKey) {
+    transformJournalMock();
+    return;
+  }
+
+  try {
+    const messages = [
+      {
+        role: "system",
+        content:
+          "You are AffirmFlow AI. Rewrite the user's notes into one concise, compassionate reflection (2-3 sentences).",
+      },
+      {
+        role: "user",
+        content: `Honest: ${honest}\nGrateful: ${win}\nFriend note: ${friend}`,
+      },
+    ];
+    const reflection = await callOpenAI(messages);
+
+    out.innerHTML = `
+      <p><strong>Title:</strong> ${journalTitle || "Untitled"}</p>
+      <p><strong>Mood:</strong> ${journalMood || "—"} • <strong>Focus:</strong> ${journalFocus || "—"}</p>
+      <p><strong>Honest:</strong> ${honest || "—"}</p>
+      <p><strong>Grateful:</strong> ${win || "—"}</p>
+      <p><strong>Friend note:</strong> ${friend || "—"}</p>
+      <p>${reflection}</p>
+    `;
+
+    const { history, index: idx, todayStr } = ensureActiveJournalEntry();
+    const combinedRaw = combineJournalInputs({ honest, win, friend });
+    const entry = history[idx] || {};
+    const merged = mergeSection(
+      entry,
+      "Reflection:",
+      combinedRaw + `\n${reflection}`
+    );
+    history[idx] = {
+      ...entry,
+      title: journalTitle || entry.title || "Untitled",
+      raw: merged.raw,
+      ai: merged.ai,
+      date: entry.date || new Date().toLocaleString(),
+      entryDate: entry.entryDate || todayStr,
+      mood: journalMood,
+      focus: journalFocus,
+    };
+    currentJournalIndex = idx;
+    editingExistingEntry = true;
+    setJournalData(history);
+    loadJournalHistory();
+    resetJournalInputs();
+  } catch (err) {
+    console.error(err);
+    out.innerHTML =
+      "<p>AI unavailable right now. Using backup reflection.</p>";
+    transformJournalMock();
+  }
+}
+
+function saveJournalRaw() {
+  captureCurrentJournalPrompt();
+  const { honest, win, friend } = journalResponses;
+  const out = document.getElementById("journalOutput");
+  const combined = combineJournalInputs({ honest, win, friend });
+
+  if (!combined) {
+    alert("Please write something before saving.");
+    return;
+  }
+
+  const { history, index: idx, todayStr } = ensureActiveJournalEntry();
+  const entry = history[idx] || {};
+  const merged = mergeSection(entry, "Reflection:", combined);
+  history[idx] = {
+    ...entry,
+    title: journalTitle || entry.title || "Untitled",
+    raw: merged.raw,
+    ai: merged.ai,
+    date: entry.date || new Date().toLocaleString(),
+    entryDate: entry.entryDate || todayStr,
+    mood: journalMood,
+    focus: journalFocus,
+  };
+  currentJournalIndex = idx;
+  setJournalData(history);
+  loadJournalHistory();
+
+  out.innerHTML = `
+    <p><strong>Title:</strong> ${journalTitle || "Untitled"}</p>
+    <p><strong>Mood:</strong> ${journalMood || "—"} • <strong>Focus:</strong> ${journalFocus || "—"}</p>
+    <p><strong>Honest:</strong> ${honest || "—"}</p>
+    <p><strong>Grateful:</strong> ${win || "—"}</p>
+    <p><strong>Friend note:</strong> ${friend || "—"}</p>
+  `;
+  resetJournalInputs();
+}
+
+function saveEditedReflection() {
+  const out = document.getElementById("journalOutput");
+  const text = out.innerText.trim();
+  if (!text) {
+    alert("Please add some reflection text before saving.");
+    return;
+  }
+
+  const history = getJournalData();
+  if (!history.length && currentJournalIndex === null) {
+    history.push({
+      title: journalTitle || "Untitled",
+      raw: "Custom entry",
+      ai: text,
+      date: new Date().toLocaleString(),
+      entryDate: new Date().toISOString().slice(0, 10),
+      mood: journalMood,
+      focus: journalFocus,
+    });
+    currentJournalIndex = history.length - 1;
+  } else {
+    const targetIndex =
+      currentJournalIndex !== null ? currentJournalIndex : history.length - 1;
+
+    if (targetIndex < 0 || targetIndex >= history.length) {
+      alert("No journal entry selected to update.");
+      return;
+    }
+
+    history[targetIndex].ai = text;
+    history[targetIndex].raw = history[targetIndex].raw || "Edited entry";
+    history[targetIndex].title = journalTitle || history[targetIndex].title || "Untitled";
+    history[targetIndex].entryDate =
+      history[targetIndex].entryDate ||
+      (history[targetIndex].date
+        ? new Date(history[targetIndex].date).toISOString().slice(0, 10)
+        : new Date().toISOString().slice(0, 10));
+    history[targetIndex].date =
+      history[targetIndex].date || new Date().toLocaleString();
+  }
+  setJournalData(history);
+  loadJournalHistory();
+}
+
+function combineJournalInputs({ honest, win, friend }) {
+  const parts = [];
+  if (honest) parts.push(`Honest: ${honest}`);
+  if (win) parts.push(`Grateful: ${win}`);
+  if (friend) parts.push(`Friend: ${friend}`);
+  return parts.join("\n");
+}
+
+function captureCurrentJournalPrompt() {
+  const inputEl = document.getElementById("journalInput");
+  const value = inputEl.value.trim();
+  const current = journalPrompts[currentJournalPromptIndex];
+  if (current && value) {
+    journalResponses[current.key] = value;
+  }
+}
+
+function nextJournalPrompt() {
+  captureCurrentJournalPrompt();
+  currentJournalPromptIndex =
+    (currentJournalPromptIndex + 1) % journalPrompts.length;
+  updateJournalPromptLabel();
+  document.getElementById("journalInput").value = "";
+}
+
+function updateJournalPromptLabel() {
+  const labelEl = document.getElementById("journalPromptLabel");
+  const current = journalPrompts[currentJournalPromptIndex];
+  if (labelEl && current) {
+    labelEl.textContent = current.label;
+    document
+      .getElementById("journalInput")
+      .setAttribute("placeholder", `Type your answer for: ${current.label}`);
+  }
+}
+
+function resetJournalInputs() {
+  journalResponses = { honest: "", win: "", friend: "" };
+  currentJournalPromptIndex = 0;
+  const inputEl = document.getElementById("journalInput");
+  if (inputEl) inputEl.value = "";
+  const titleEl = document.getElementById("journalTitleInput");
+  journalTitle = "";
+  if (titleEl) titleEl.value = "";
+  updateJournalPromptLabel();
+  setJournalOutputMode("edit");
+}
+
+function handleJournalMoodChange() {
+  const select = document.getElementById("journalMoodSelect");
+  const input = document.getElementById("journalCustomMood");
+  const isCustom = select.value === "custom";
+  input.classList.toggle("hidden", !isCustom);
+  const value = isCustom ? input.value.trim() : select.value;
+  setSharedMood(value);
+}
+
+function handleJournalFocusChange() {
+  const select = document.getElementById("journalFocusSelect");
+  const input = document.getElementById("journalCustomFocus");
+  const isCustom = select.value === "custom";
+  input.classList.toggle("hidden", !isCustom);
+  const value = isCustom ? input.value.trim() : select.value;
+  setSharedFocus(value);
+}
+
+function handleJournalMoodInput() {
+  const input = document.getElementById("journalCustomMood");
+  setSharedMood(input.value.trim());
+}
+
+function handleJournalFocusInput() {
+  const input = document.getElementById("journalCustomFocus");
+  setSharedFocus(input.value.trim());
+}
+
+function handleJournalTitleInput() {
+  const input = document.getElementById("journalTitleInput");
+  journalTitle = input.value.trim();
+}
+
+function handleAffirmMoodInput() {
+  const input = document.getElementById("customMoodInput");
+  setSharedMood(input.value.trim());
+}
+
+function handleAffirmFocusInput() {
+  const input = document.getElementById("customFocusInput");
+  setSharedFocus(input.value.trim());
+}
+
+function formatMultiline(text) {
+  if (!text) return "";
+  return text.replace(/\n/g, "<br>");
+}
+
+// ---- HABIT + STREAK (MULTI) ----
+function getHabits() {
+  // migrate old single habit if present
+  const legacy = JSON.parse(
+    localStorage.getItem("affirmflow_habit") || "null"
+  );
+  const existing = JSON.parse(
+    localStorage.getItem("affirmflow_habits") || "[]"
+  );
+  if (legacy && !existing.length) {
+    const migrated = [
+      {
+        id: Date.now(),
+        name: legacy.name || "Glow-up habit",
+        streak: legacy.streak || 0,
+        lastDate: legacy.lastDate || null,
+        freezesLeft: 3,
+      },
+    ];
+    localStorage.setItem("affirmflow_habits", JSON.stringify(migrated));
+    localStorage.removeItem("affirmflow_habit");
+    return migrated;
+  }
+  return existing;
+}
+
+function saveHabits(list) {
+  localStorage.setItem("affirmflow_habits", JSON.stringify(list));
+}
+
+function loadHabit() {
+  renderHabitUI();
+}
+
+function renderHabitUI() {
+  const habits = getHabits();
+  const streakCountEl = document.getElementById("streakCount");
+  const habitNameLabel = document.getElementById("habitNameLabel");
+  const listEl = document.getElementById("habitList");
+
+  const best = habits.reduce(
+    (acc, h) => (h.streak > (acc?.streak || 0) ? h : acc),
+    null
+  );
+
+  streakCountEl.textContent = best ? best.streak || 0 : 0;
+  habitNameLabel.textContent = best ? best.name : "No habit set yet";
+
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  if (!habits.length) {
+    listEl.innerHTML = `<p class="streak-label">No habits yet. Add one above.</p>`;
+    return;
+  }
+
+  habits.forEach((habit) => {
+    const card = document.createElement("div");
+    card.className = "habit-item";
+
+    const header = document.createElement("div");
+    header.className = "habit-item-header";
+    const name = document.createElement("div");
+    name.className = "habit-item-name";
+    name.textContent = habit.name;
+    const streak = document.createElement("div");
+    streak.className = "habit-item-streak";
+    streak.textContent = `${habit.streak || 0} 🔥`;
+    header.appendChild(name);
+    header.appendChild(streak);
+
+    const meta = document.createElement("div");
+    meta.className = "habit-item-meta";
+    const freeze = document.createElement("span");
+    freeze.className = "habit-freeze";
+    freeze.textContent = `Freezes left: ${habit.freezesLeft ?? 3}`;
+    const last = document.createElement("span");
+    last.textContent = habit.lastDate
+      ? `Last: ${habit.lastDate}`
+      : "Not logged yet";
+    meta.appendChild(freeze);
+    meta.appendChild(last);
+
+    const actions = document.createElement("div");
+    actions.className = "habit-item-actions";
+    const markBtn = document.createElement("button");
+    markBtn.className = "btn btn-primary";
+    markBtn.textContent = "Mark today";
+    markBtn.onclick = () => markTodayDone(habit.id);
+    actions.appendChild(markBtn);
+
+    if (habit.lastDate === new Date().toISOString().slice(0, 10)) {
+      const undoBtn = document.createElement("button");
+      undoBtn.className = "btn btn-ghost btn-icon";
+      undoBtn.textContent = "Undo today";
+      undoBtn.onclick = () => undoToday(habit.id);
+      actions.appendChild(undoBtn);
+    }
+
+    card.appendChild(header);
+    card.appendChild(meta);
+    card.appendChild(actions);
+    listEl.appendChild(card);
+  });
+}
+
+function addHabit() {
+  const input = document.getElementById("habitNameInput");
+  const name = input.value.trim();
+  if (!name) return;
+  const habits = getHabits();
+  if (habits.length >= 10) {
+    alert("You can track up to 10 habits.");
+    return;
+  }
+  habits.push({
+    id: crypto.randomUUID ? crypto.randomUUID() : Date.now(),
+    name,
+    streak: 0,
+    lastDate: null,
+    freezesLeft: 3,
+  });
+  setHabits(habits);
+  input.value = "";
+  renderHabitUI();
+}
+
+function markTodayDone(id) {
+  const habits = getHabits();
+  const idx = habits.findIndex((h) => h.id === id);
+  if (idx === -1) return;
+  const habit = habits[idx];
+
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+
+  if (habit.lastDate === todayStr) {
+    return; // already logged today
+  }
+
+  const snapshot = {
+    streak: habit.streak || 0,
+    lastDate: habit.lastDate || null,
+    freezesLeft: habit.freezesLeft ?? 3,
+  };
+
+  let newStreak = habit.streak ? habit.streak : 0;
+  if (habit.lastDate) {
+    const last = new Date(habit.lastDate);
+    const todayMidnight = new Date(todayStr);
+    const lastMidnight = new Date(last.toISOString().slice(0, 10));
+    const diffDays = Math.floor(
+      (todayMidnight - lastMidnight) / 86400000
+    );
+    if (diffDays === 1) {
+      newStreak = newStreak + 1;
+    } else if (diffDays > 1) {
+      if (habit.freezesLeft && habit.freezesLeft > 0) {
+        habit.freezesLeft -= 1; // spend a freeze to keep streak
+      } else {
+        newStreak = 0;
+      }
+      newStreak = newStreak + 1;
+    }
+  } else {
+    newStreak = 1;
+  }
+
+  habits[idx] = {
+    ...habit,
+    streak: newStreak,
+    lastDate: todayStr,
+    freezesLeft: habit.freezesLeft ?? 0,
+    prev: snapshot,
+  };
+
+  setHabits(habits);
+  renderHabitUI();
+}
+
+function deleteHabit(id) {
+  const habits = getHabits().filter((h) => h.id !== id);
+  setHabits(habits, id);
+  renderHabitUI();
+}
+
+function openHabitManager() {
+  renderHabitManager();
+  const overlay = document.getElementById("habitOverlay");
+  if (overlay) {
+    overlay.classList.remove("hidden");
+    document.body.classList.add("no-scroll");
+  }
+}
+
+function closeHabitManager() {
+  const overlay = document.getElementById("habitOverlay");
+  if (overlay) {
+    overlay.classList.add("hidden");
+    document.body.classList.remove("no-scroll");
+  }
+}
+
+function renderHabitManager() {
+  const listEl = document.getElementById("habitOverlayList");
+  if (!listEl) return;
+  const habits = getHabits();
+  if (!habits.length) {
+    listEl.innerHTML =
+      "<div class='history-item'><div class='history-item-snippet'>No habits yet.</div></div>";
+    return;
+  }
+
+  listEl.innerHTML = "";
+  habits
+    .map((h) => h)
+    .reverse()
+    .forEach((habit) => {
+      const div = document.createElement("div");
+      div.className = "history-item";
+
+      const header = document.createElement("div");
+      header.className = "history-item-header";
+
+      const title = document.createElement("div");
+      title.className = "history-item-title";
+      title.textContent = habit.name;
+
+      const meta = document.createElement("div");
+      meta.className = "history-item-meta";
+      meta.textContent = `Streak: ${habit.streak || 0} • Freezes: ${
+        habit.freezesLeft ?? 3
+      }`;
+
+      header.appendChild(title);
+      header.appendChild(meta);
+
+      const snippet = document.createElement("div");
+      snippet.className = "history-item-snippet";
+      snippet.textContent = habit.lastDate
+        ? `Last marked: ${habit.lastDate}`
+        : "Not logged yet";
+
+      const del = document.createElement("button");
+      del.className = "btn btn-ghost";
+      del.textContent = "Delete";
+      del.onclick = () => {
+        deleteHabit(habit.id);
+        renderHabitManager();
+      };
+
+      div.appendChild(header);
+      div.appendChild(snippet);
+      div.appendChild(del);
+      listEl.appendChild(div);
+    });
+}
+
+function undoToday(id) {
+  const habits = getHabits();
+  const idx = habits.findIndex((h) => h.id === id);
+  if (idx === -1) return;
+  const habit = habits[idx];
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (habit.lastDate !== todayStr) return;
+
+  const prev = habit.prev || {
+    streak: Math.max(0, (habit.streak || 1) - 1),
+    lastDate: habit.lastDate ? null : habit.lastDate,
+    freezesLeft: habit.freezesLeft ?? 3,
+  };
+
+  habits[idx] = {
+    ...habit,
+    streak: prev.streak || 0,
+    lastDate: prev.lastDate || null,
+    freezesLeft: prev.freezesLeft ?? 0,
+    prev: undefined,
+  };
+
+  setHabits(habits);
+  renderHabitUI();
+}
+
+function attachHabitSwipe(card, id) {
+  let startX = 0;
+  let currentX = 0;
+  let dragging = false;
+  const threshold = 70;
+
+  const onStart = (e) => {
+    dragging = true;
+    startX = e.touches ? e.touches[0].clientX : e.clientX;
+    card.style.transition = "none";
+  };
+
+  const onMove = (e) => {
+    if (!dragging) return;
+    currentX = e.touches ? e.touches[0].clientX : e.clientX;
+    const delta = currentX - startX;
+    if (delta < 0) {
+      card.style.transform = `translateX(${delta}px)`;
+    }
+  };
+
+  const onEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+    const delta = currentX - startX;
+    card.style.transition = "";
+    if (delta < -threshold) {
+      deleteHabit(id);
+    } else {
+      card.style.transform = "translateX(0)";
+    }
+  };
+
+  card.addEventListener("touchstart", onStart);
+  card.addEventListener("touchmove", onMove);
+  card.addEventListener("touchend", onEnd);
+  card.addEventListener("mousedown", onStart);
+  card.addEventListener("mousemove", onMove);
+  card.addEventListener("mouseup", onEnd);
+  card.addEventListener("mouseleave", onEnd);
+}
+
+function saveTodayHabitsToJournal() {
+  const habits = getHabits();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const completedToday = habits.filter((h) => h.lastDate === todayStr);
+
+  if (!completedToday.length) {
+    alert("No habits marked today yet.");
+    return;
+  }
+
+  const wins = completedToday.map(
+    (h) => `${h.name} (Streak ${h.streak})`
+  );
+  appendWinsToJournal(wins);
+}
+
+// ---- INIT ----
+setQuoteOfDay();
+loadJournalHistory();
+loadHabit();
+updateJournalPromptLabel();
+handleJournalMoodChange();
+handleJournalFocusChange();
+setupJournalOutputFocus();
+setJournalOutputMode("edit");
+initTheme();
+initAuth();
+initSupabase();
+loadApiKey();
+showScreen("home");
+
+function setupJournalOutputFocus() {
+  const out = document.getElementById("journalOutput");
+  if (!out) return;
+  out.addEventListener("focus", () => out.classList.add("expanded"));
+  out.addEventListener("blur", () => {
+    if (!out.classList.contains("reading-view")) {
+      out.classList.remove("expanded");
+    }
+  });
+  out.addEventListener("click", () => {
+    openReflectionOverlay();
+  });
+}
+
+function setJournalOutputMode(mode) {
+  const out = document.getElementById("journalOutput");
+  if (!out) return;
+  if (mode === "reading") {
+    out.classList.add("reading-view", "expanded");
+  } else {
+    out.classList.remove("reading-view", "expanded");
+  }
+}
+
+let lastSyncedReflection = "";
+function setSharedMood(value) {
+  currentMood = value || "";
+  journalMood = value || "";
+
+  const affirmSel = document.getElementById("moodSelect");
+  const affirmCustom = document.getElementById("customMoodInput");
+  const journalSel = document.getElementById("journalMoodSelect");
+  const journalCustom = document.getElementById("journalCustomMood");
+
+  if (affirmSel && affirmCustom) {
+    if (value && [...affirmSel.options].some((o) => o.value === value)) {
+      affirmSel.value = value;
+      affirmCustom.classList.add("hidden");
+      affirmCustom.value = "";
+    } else {
+      affirmSel.value = "custom";
+      affirmCustom.classList.remove("hidden");
+      affirmCustom.value = value || "";
+    }
+  }
+
+  if (journalSel && journalCustom) {
+    if (value && [...journalSel.options].some((o) => o.value === value)) {
+      journalSel.value = value;
+      journalCustom.classList.add("hidden");
+      journalCustom.value = "";
+    } else {
+      journalSel.value = "custom";
+      journalCustom.classList.remove("hidden");
+      journalCustom.value = value || "";
+    }
+  }
+}
+
+function setSharedFocus(value) {
+  currentFocus = value || "";
+  journalFocus = value || "";
+
+  const affirmSel = document.getElementById("focusSelect");
+  const affirmCustom = document.getElementById("customFocusInput");
+  const journalSel = document.getElementById("journalFocusSelect");
+  const journalCustom = document.getElementById("journalCustomFocus");
+
+  if (affirmSel && affirmCustom) {
+    if (value && [...affirmSel.options].some((o) => o.value === value)) {
+      affirmSel.value = value;
+      affirmCustom.classList.add("hidden");
+      affirmCustom.value = "";
+    } else {
+      affirmSel.value = "custom";
+      affirmCustom.classList.remove("hidden");
+      affirmCustom.value = value || "";
+    }
+  }
+
+  if (journalSel && journalCustom) {
+    if (value && [...journalSel.options].some((o) => o.value === value)) {
+      journalSel.value = value;
+      journalCustom.classList.add("hidden");
+      journalCustom.value = "";
+    } else {
+      journalSel.value = "custom";
+      journalCustom.classList.remove("hidden");
+      journalCustom.value = value || "";
+    }
+  }
+}
+
+function appendHabitWinToJournal(habit) {
+  if (!habit) return;
+  appendWinsToJournal([`${habit.name} (Streak ${habit.streak})`]);
+}
+
+function appendWinsToJournal(items) {
+  if (!items || !items.length) return;
+  const { history, index: idx, todayStr } = ensureActiveJournalEntry();
+  const entry = history[idx] || {};
+  const header = "Things I did well today:";
+  const bullets = items.map((i) => `- ${i}`).join("\n");
+  const merged = mergeSection(entry, header, bullets);
+
+  history[idx] = {
+    ...entry,
+    title: entry.title || journalTitle || "Things I did well today",
+    raw: merged.raw,
+    ai: merged.ai,
+    date: entry.date || new Date().toLocaleString(),
+    entryDate: entry.entryDate || todayStr,
+    mood: journalMood,
+    focus: journalFocus,
+  };
+  currentJournalIndex = idx;
+  editingExistingEntry = true;
+
+  setJournalData(history);
+  loadJournalHistory();
+
+  const out = document.getElementById("journalOutput");
+  if (out) {
+    out.innerHTML = formatMultiline(history[currentJournalIndex].ai || "");
+  }
+}
+
+function ensureActiveJournalEntry() {
+  const history = getJournalData();
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  // If editing an existing entry, keep using it.
+  if (
+    editingExistingEntry &&
+    currentJournalIndex !== null &&
+    history[currentJournalIndex]
+  ) {
+    return { history, index: currentJournalIndex, todayStr };
+  }
+
+  // Otherwise, create a fresh entry (allows multiple entries per day).
+  const newEntry = {
+    id: crypto.randomUUID ? crypto.randomUUID() : Date.now(),
+    title: journalTitle || "Daily Entry",
+    raw: "",
+    ai: "",
+    date: new Date().toLocaleString(),
+    entryDate: todayStr,
+    mood: journalMood,
+    focus: journalFocus,
+  };
+  history.push(newEntry);
+  currentJournalIndex = history.length - 1;
+  editingExistingEntry = true;
+  return { history, index: currentJournalIndex, todayStr };
+}
+
+function mergeSection(entry, header, content) {
+  const boldHeader = `<strong>${header}</strong>`;
+  const stripSection = (text) => {
+    if (!text || (!text.includes(header) && !text.includes(boldHeader)))
+      return text || "";
+    const lines = text.split("\n");
+    const kept = [];
+    let skipping = false;
+    const isHeaderLine = (line) =>
+      line.startsWith(header) ||
+      line.startsWith(boldHeader) ||
+      line.includes(`>${header}</strong>`);
+
+    lines.forEach((line) => {
+      if (!skipping && isHeaderLine(line)) {
+        skipping = true;
+        return;
+      }
+      if (skipping) {
+        const nextHeader =
+          /^[A-Za-z].*:/.test(line) ||
+          line.startsWith("Affirmation of the Day") ||
+          line.startsWith("<strong>Affirmation of the Day");
+        const nextWinHeader =
+          header === "Things I did well today:" &&
+          !line.startsWith("- ") &&
+          line.trim() !== "";
+        if (nextHeader || nextWinHeader || isHeaderLine(line)) {
+          skipping = false;
+          kept.push(line);
+        }
+      } else {
+        kept.push(line);
+      }
+    });
+    return kept.join("\n").trim();
+  };
+
+  const cleanedRaw = stripSection(entry.raw || "");
+  const cleanedAi = stripSection(entry.ai || "");
+  const section = `${boldHeader}\n${content}`;
+  const newRaw = cleanedRaw ? `${cleanedRaw}\n${section}` : section;
+  const newAi = cleanedAi ? `${cleanedAi}\n${section}` : section;
+
+  return { raw: newRaw, ai: newAi };
+}
+
+function openReflectionOverlay() {
+  const overlay = document.getElementById("reflectionOverlay");
+  const overlayContent = document.getElementById("reflectionOverlayContent");
+  const base = document.getElementById("journalOutput");
+  if (!overlay || !overlayContent || !base) return;
+  lastSyncedReflection = base.innerHTML;
+  overlayContent.innerHTML = base.innerHTML;
+  overlay.classList.remove("hidden");
+  document.body.classList.add("no-scroll");
+  overlayContent.focus();
+}
+
+function closeReflectionOverlay() {
+  const overlay = document.getElementById("reflectionOverlay");
+  const overlayContent = document.getElementById("reflectionOverlayContent");
+  const base = document.getElementById("journalOutput");
+  if (!overlay || !overlayContent || !base) return;
+  base.innerHTML = overlayContent.innerHTML || lastSyncedReflection;
+  overlay.classList.add("hidden");
+  document.body.classList.remove("no-scroll");
+  setJournalOutputMode("reading");
+}
+
+function openJournalHistoryOverlay() {
+  renderFullJournalHistory();
+  const overlay = document.getElementById("historyOverlay");
+  if (!overlay) return;
+  overlay.classList.remove("hidden");
+  document.body.classList.add("no-scroll");
+}
+
+function closeJournalHistoryOverlay() {
+  const overlay = document.getElementById("historyOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  document.body.classList.remove("no-scroll");
+}
+
+function renderFullJournalHistory() {
+  const listEl = document.getElementById("historyOverlayList");
+  if (!listEl) return;
+  const history = getJournalData();
+  if (!history.length) {
+    listEl.innerHTML =
+      "<div class='history-item'><div class='history-item-snippet'>No entries yet.</div></div>";
+    return;
+  }
+
+  listEl.innerHTML = "";
+  history
+    .map((item, idx) => ({ item, idx }))
+    .reverse()
+    .forEach(({ item, idx }) => {
+      const div = document.createElement("div");
+      div.className = "history-item";
+
+      const header = document.createElement("div");
+      header.className = "history-item-header";
+
+      const title = document.createElement("div");
+      title.className = "history-item-title";
+      title.textContent = item.title || "Untitled";
+
+      const meta = document.createElement("div");
+      meta.className = "history-item-meta";
+      const moodFocus =
+        item.mood && item.focus
+          ? ` • Mood: ${item.mood} • Focus: ${item.focus}`
+          : "";
+      meta.textContent = `${item.date || ""}${moodFocus}`;
+
+      header.appendChild(title);
+      header.appendChild(meta);
+
+      const snippet = document.createElement("div");
+      snippet.className = "history-item-snippet";
+      snippet.innerHTML = formatMultiline(
+        item.ai?.length ? item.ai.slice(0, 180) + (item.ai.length > 180 ? "…" : "") : ""
+      );
+
+      const btn = document.createElement("button");
+      btn.className = "btn btn-primary";
+      btn.textContent = "Open for editing";
+      btn.onclick = () => {
+        loadJournalEntryByIndex(idx);
+        closeJournalHistoryOverlay();
+        showScreen("journal");
+      };
+
+      const del = document.createElement("button");
+      del.className = "btn btn-ghost";
+      del.textContent = "Delete";
+      del.onclick = () => {
+        deleteJournalEntry(idx);
+        renderFullJournalHistory();
+      };
+
+      div.appendChild(header);
+      div.appendChild(snippet);
+      div.appendChild(btn);
+      div.appendChild(del);
+      listEl.appendChild(div);
+    });
+}
+
+function loadJournalEntryByIndex(index) {
+  const history = getJournalData();
+  const item = history[index];
+  if (!item) return;
+
+  currentJournalIndex = index;
+  editingExistingEntry = true;
+  const out = document.getElementById("journalOutput");
+  const titleHeader = item.title
+    ? `<p><strong>Title:</strong> ${item.title}</p>`
+    : "";
+  const header =
+    item.mood && item.focus
+      ? `<p><strong>Mood:</strong> ${item.mood} • <strong>Focus:</strong> ${item.focus}</p>`
+      : "";
+  if (out) {
+    out.innerHTML = `${titleHeader}${header}<p>${formatMultiline(
+      item.ai
+    )}</p>`;
+  }
+  setJournalOutputMode("reading");
+  lastSyncedReflection = item.ai || "";
+
+  journalTitle = item.title || "";
+  const titleInput = document.getElementById("journalTitleInput");
+  if (titleInput) titleInput.value = journalTitle;
+
+  applyMoodSelection(item.mood);
+  applyFocusSelection(item.focus);
+}
+
+function applyMoodSelection(value) {
+  setSharedMood(value || "");
+}
+
+function applyFocusSelection(value) {
+  setSharedFocus(value || "");
+}
+
+function deleteJournalEntry(index) {
+  const history = getJournalData();
+  if (index < 0 || index >= history.length) return;
+  const entry = history[index];
+  history.splice(index, 1);
+  setJournalData(history, entry?.id);
+
+  if (currentJournalIndex === index) {
+    currentJournalIndex = history.length ? Math.min(index, history.length - 1) : null;
+  } else if (currentJournalIndex > index) {
+    currentJournalIndex -= 1;
+  }
+  if (history.length === 0) {
+    editingExistingEntry = false;
+  }
+
+  loadJournalHistory();
+  if (history.length && currentJournalIndex !== null) {
+    loadJournalEntryByIndex(currentJournalIndex);
+  } else {
+    const out = document.getElementById("journalOutput");
+    if (out) {
+      out.innerHTML =
+        "<p>Your transformed reflections will appear here. Tap to type your own words or edit.</p>";
+    }
+  }
+}
+
+function syncJournalOutput(entry) {
+  const out = document.getElementById("journalOutput");
+  if (!out || !entry) return;
+  out.innerHTML = formatMultiline(entry.ai || "");
+}
+
+function initAuth() {
+  // Supabase handles auth; if no session, we’ll show the overlay after initSupabase.
+}
+
+function loadApiKey() {
+  const stored = localStorage.getItem("affirmflow_api_key");
+  apiKey = stored || null;
+  const input = document.getElementById("settingsApiKey");
+  if (input && apiKey) input.value = apiKey.replace(/.(?=.{4})/g, "•");
+}
+
+function saveApiKey() {
+  const input = document.getElementById("settingsApiKey");
+  if (!input) return;
+  const key = input.value.trim();
+  if (!key) {
+    alert("Enter an API key first.");
+    return;
+  }
+  apiKey = key;
+  localStorage.setItem("affirmflow_api_key", key);
+  input.value = key.replace(/.(?=.{4})/g, "•");
+  alert("API key saved locally.");
+}
+
+async function callOpenAI(messages) {
+  // Prefer proxy if provided
+  if (AI_PROXY_URL) {
+    const token =
+      (await supabaseClient?.auth.getSession())?.data?.session?.access_token ||
+      null;
+    const resp = await fetch(AI_PROXY_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ messages }),
+    });
+    if (!resp.ok) throw new Error("AI proxy error");
+    const data = await resp.json();
+    return data.content?.trim() || "";
+  }
+
+  if (!apiKey) throw new Error("No API key");
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages,
+      max_tokens: 180,
+    }),
+  });
+  if (!resp.ok) throw new Error("OpenAI error");
+  const data = await resp.json();
+  return data.choices?.[0]?.message?.content?.trim() || "";
+}
+
+function saveCredentials() {
+  alert("Supabase auth is enabled. Use email/password below to sign up or log in.");
+}
+
+function loginUser() {
+  const email = document.getElementById("authUsername").value.trim();
+  const pass = document.getElementById("authPassword").value.trim();
+  if (!supabaseClient || !email || !pass) {
+    alert("Enter email and password.");
+    return;
+  }
+  supabaseClient.auth
+    .signInWithPassword({ email, password: pass })
+    .then(({ data, error }) => {
+      if (error) {
+        alert(error.message || "Login failed.");
+        return;
+      }
+      currentUser = data.user;
+      isAuthenticated = true;
+      closeAuthOverlay();
+      fetchRemoteData().then(() => {
+        loadJournalHistory();
+        renderHabitUI();
+      });
+    });
+}
+
+function logoutUser() {
+  isAuthenticated = false;
+  currentUser = null;
+  supabaseClient?.auth.signOut();
+  journalCache = [];
+  habitCache = [];
+  openAuthOverlay();
+}
+
+function openAuthOverlay() {
+  const overlay = document.getElementById("authOverlay");
+  if (overlay) {
+    overlay.classList.remove("hidden");
+    document.body.classList.add("no-scroll");
+  }
+}
+
+function closeAuthOverlay() {
+  const overlay = document.getElementById("authOverlay");
+  if (overlay) {
+    overlay.classList.add("hidden");
+    document.body.classList.remove("no-scroll");
+  }
+}
+
+function signUpUser() {
+  const email = document.getElementById("authUsername").value.trim();
+  const pass = document.getElementById("authPassword").value.trim();
+  if (!supabaseClient || !email || !pass) {
+    alert("Enter email and password.");
+    return;
+  }
+  supabaseClient.auth
+    .signUp({ email, password: pass })
+    .then(({ data, error }) => {
+      if (error) {
+        alert(error.message || "Signup failed.");
+        return;
+      }
+      currentUser = data.user;
+      isAuthenticated = true;
+      closeAuthOverlay();
+      fetchRemoteData().then(() => {
+        loadJournalHistory();
+        renderHabitUI();
+      });
+    });
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") || "dark";
+  const next = current === "light" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("affirmflow_theme", next);
+}
+
+function initTheme() {
+  const saved = localStorage.getItem("affirmflow_theme") || "dark";
+  document.documentElement.setAttribute("data-theme", saved);
+}
+function startNewJournalEntry() {
+  currentJournalIndex = null;
+  editingExistingEntry = false;
+  journalTitle = "";
+  resetJournalInputs();
+  const out = document.getElementById("journalOutput");
+  if (out) {
+    out.innerHTML =
+      "<p>Your transformed reflections will appear here. Tap to type your own words or edit.</p>";
+  }
+}
+
+async function initSupabase() {
+  if (!window.supabase) return;
+  supabaseClient = supabase.createClient(SUPA_URL, SUPA_KEY);
+  const { data } = await supabaseClient.auth.getSession();
+  if (data?.session?.user) {
+    currentUser = data.session.user;
+    isAuthenticated = true;
+    await fetchRemoteData();
+    loadJournalHistory();
+    renderHabitUI();
+  } else {
+    openAuthOverlay();
+  }
+}
+
+async function fetchRemoteData() {
+  await Promise.all([fetchRemoteJournal(), fetchRemoteHabits()]);
+}
+
+async function fetchRemoteJournal() {
+  if (!supabaseClient || !currentUser) return;
+  const { data, error } = await supabaseClient
+    .from("journal_entries")
+    .select("*")
+    .eq("user_id", currentUser.id)
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("Journal fetch error", error);
+    return;
+  }
+  journalCache = data || [];
+}
+
+async function fetchRemoteHabits() {
+  if (!supabaseClient || !currentUser) return;
+  const { data, error } = await supabaseClient
+    .from("habits")
+    .select("*")
+    .eq("user_id", currentUser.id)
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("Habit fetch error", error);
+    return;
+  }
+  habitCache = data || [];
+}
+
+function getJournalData() {
+  if (journalCache.length) return journalCache;
+  const local = JSON.parse(localStorage.getItem("affirmflow_journal") || "[]");
+  journalCache = local;
+  return journalCache;
+}
+
+function setJournalData(list, deletedId = null) {
+  journalCache = list;
+  localStorage.setItem("affirmflow_journal", JSON.stringify(list));
+  if (supabaseClient && currentUser) {
+    const clean = list.map((entry) => ({
+      id: entry.id || (crypto.randomUUID ? crypto.randomUUID() : Date.now()),
+      user_id: currentUser.id,
+      title: entry.title || "Untitled",
+      raw: entry.raw || "",
+      ai: entry.ai || "",
+      date: entry.date || new Date().toLocaleString(),
+      entry_date: entry.entryDate || entry.entry_date || null,
+      mood: entry.mood || "",
+      focus: entry.focus || "",
+    }));
+    supabaseClient.from("journal_entries").upsert(clean).then(() => {
+      if (deletedId) {
+        supabaseClient
+          .from("journal_entries")
+          .delete()
+          .eq("id", deletedId)
+          .eq("user_id", currentUser.id);
+      }
+    });
+  }
+}
+
+function getHabits() {
+  if (habitCache.length) return habitCache;
+  const local = JSON.parse(localStorage.getItem("affirmflow_habits") || "[]");
+  habitCache = local;
+  return habitCache;
+}
+
+function setHabits(list, deletedId = null) {
+  habitCache = list;
+  localStorage.setItem("affirmflow_habits", JSON.stringify(list));
+  if (supabaseClient && currentUser) {
+    const clean = list.map((h) => ({
+      id: h.id || (crypto.randomUUID ? crypto.randomUUID() : Date.now()),
+      user_id: currentUser.id,
+      name: h.name,
+      streak: h.streak || 0,
+      last_date: h.lastDate || h.last_date || null,
+      freezes_left: h.freezesLeft ?? h.freezes_left ?? 3,
+    }));
+    supabaseClient.from("habits").upsert(clean).then(() => {
+      if (deletedId) {
+        supabaseClient
+          .from("habits")
+          .delete()
+          .eq("id", deletedId)
+          .eq("user_id", currentUser.id);
+      }
+    });
+  }
+}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AffirmFlow</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <!-- CHANGE NOTE: Added explicit section labels so future edits can quickly spot major areas (header, screens, nav) without scanning the whole file. -->
+  <div class="app">
+    <!-- === HEADER === -->
+    <!-- CHANGE NOTE: Header tag labeled to keep brand/logo area easy to find when updating visuals. -->
+    <header>
+        <div class="logo">
+        <div class="logo-orb">
+          <svg viewBox="0 0 64 64" aria-hidden="true" class="logo-orb-svg">
+            <defs>
+              <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#22d3ee" />
+                <stop offset="50%" stop-color="#3b82f6" />
+                <stop offset="100%" stop-color="#a855f7" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M10 32c0-12 18-12 24 0s24 12 24 0-18-12-24 0-24 12-24 0Z"
+              fill="none"
+              stroke="#000"
+              stroke-width="4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              opacity="0.98"
+              transform="rotate(130 32 32)"
+            />
+          </svg>
+        </div>
+        <div>
+          <div class="logo-title">AFFIRMFLOW</div>
+          <div class="logo-sub">Cosmic affirmations • Tiny steps</div>
+        </div>
+      </div>
+      <div class="pill">v0.1 • MVP</div>
+    </header>
+
+    <main>
+      <!-- === HOME SCREEN === -->
+      <!-- CHANGE NOTE: Labeled home screen entry so navigation + feature tweaks are easy to locate. -->
+      <!-- HOME -->
+      <section id="screen-home">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">✨</span>
+              Quick Access
+            </div>
+          </div>
+          <div class="chips">
+            <button class="btn btn-ghost" onclick="showScreen('affirm')">
+              ✨ Affirmations
+            </button>
+            <button class="btn btn-ghost" onclick="showScreen('journal')">
+              📓 Journal
+            </button>
+            <button class="btn btn-ghost" onclick="showScreen('habit')">
+              🔁 Habit
+            </button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">🔮</span>
+              Today’s Energy
+            </div>
+          </div>
+          <div class="card-main-text" id="quoteText"></div>
+          <div class="card-subtext" id="quoteCategory"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">🔥</span>
+              Glow-Up Streak
+            </div>
+          </div>
+          <div class="home-streak-row">
+            <div>
+              <div class="streak-count" id="streakCount">0</div>
+              <div class="streak-label" id="habitNameLabel">
+                No habit set yet
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="showScreen('habit')">
+              Manage Habits
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- === AFFIRMATION STUDIO SCREEN === -->
+      <!-- CHANGE NOTE: Added screen label to quickly find affirmation UI when wiring real AI later. -->
+      <!-- AFFIRM -->
+      <section id="screen-affirm" class="hidden">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">✨</span>
+              Affirmation Studio
+            </div>
+          </div>
+
+          <label for="moodSelect">Mood</label>
+          <select id="moodSelect" onchange="handleMoodChange()">
+            <option>Anxious</option>
+            <option>Tired</option>
+            <option>Hopeful</option>
+            <option>Confident</option>
+            <option>Stuck</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input
+            type="text"
+            id="customMoodInput"
+            class="hidden"
+            placeholder="Type your mood"
+            oninput="handleAffirmMoodInput()"
+          />
+
+          <label for="focusSelect">Focus Area</label>
+          <select id="focusSelect" onchange="handleFocusChange()">
+            <option>Money</option>
+            <option>Healing</option>
+            <option>Love</option>
+            <option>Glow-Up</option>
+            <option>Purpose</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input
+            type="text"
+            id="customFocusInput"
+            class="hidden"
+            placeholder="Type your focus"
+            oninput="handleAffirmFocusInput()"
+          />
+
+          <button class="btn btn-primary" onclick="generateAffirmationsAI()">
+            Generate Affirmations
+          </button>
+          <div class="card-subtext">
+            Uses AI when API key is set in Settings; falls back to mock otherwise.
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">📡</span>
+              My Affirmations
+            </div>
+          </div>
+          <div class="affirmations-list" id="affirmationsList">
+            <p>Tap “Generate Affirmations” to receive 3 uplifting lines.</p>
+          </div>
+          <button class="btn btn-primary" onclick="saveAffirmationsToJournal()">
+            Save to Journal
+          </button>
+          <div class="card-subtext">
+            Sends your current affirmations into the Journal history.
+          </div>
+        </div>
+      </section>
+
+      <!-- === JOURNAL SCREEN === -->
+      <!-- CHANGE NOTE: Marked journal section for fast access when integrating AI reflections. -->
+      <!-- JOURNAL -->
+      <section id="screen-journal" class="hidden">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">📓</span>
+              Journal Reflections
+            </div>
+          </div>
+
+          <label for="journalTitleInput">Entry title</label>
+          <input
+            type="text"
+            id="journalTitleInput"
+            placeholder="Optional title for this entry"
+            oninput="handleJournalTitleInput()"
+          />
+
+          <div class="prompt-row">
+            <label id="journalPromptLabel" for="journalInput">
+              One honest sentence
+            </label>
+            <button class="btn btn-ghost" type="button" onclick="nextJournalPrompt()">
+              Next prompt
+            </button>
+          </div>
+          <textarea
+            id="journalInput"
+            placeholder="Type your answer…"
+          ></textarea>
+
+          <label for="journalMoodSelect">Mood</label>
+          <select id="journalMoodSelect" onchange="handleJournalMoodChange()">
+            <option>Calm</option>
+            <option>Anxious</option>
+            <option>Hopeful</option>
+            <option>Confident</option>
+            <option>Reflective</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input
+            type="text"
+            id="journalCustomMood"
+            class="hidden"
+            placeholder="Type your mood"
+            oninput="handleJournalMoodInput()"
+          />
+
+          <label for="journalFocusSelect">Focus</label>
+          <select id="journalFocusSelect" onchange="handleJournalFocusChange()">
+            <option>Healing</option>
+            <option>Rest</option>
+            <option>Self-worth</option>
+            <option>Productivity</option>
+            <option>Relationships</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input
+            type="text"
+            id="journalCustomFocus"
+            class="hidden"
+            placeholder="Type your focus"
+            oninput="handleJournalFocusInput()"
+          />
+
+          <button class="btn btn-primary" onclick="transformJournalAI()">
+            Transform into Reflection
+          </button>
+          <button class="btn btn-ghost" onclick="saveJournalRaw()">
+            Save to Journal
+          </button>
+
+          <div class="card-subtext">
+            One box, three prompts. Use “Next prompt” to cycle through them; mood & focus are saved too.
+            We’ll swap this mock with real AI-powered reflections later.
+          </div>
+          <button class="btn btn-ghost" type="button" onclick="openJournalHistoryOverlay()">
+            View All Entries
+          </button>
+          <button class="btn btn-ghost" type="button" onclick="startNewJournalEntry()">
+            New Entry
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">💫</span>
+              My Reflections
+            </div>
+          </div>
+          <div
+            class="journal-output"
+            id="journalOutput"
+            contenteditable="true"
+            aria-label="Edit your reflection text"
+          >
+            <p>Your transformed reflections will appear here. Tap to type your own words or edit.</p>
+          </div>
+          <button class="btn btn-primary" onclick="saveEditedReflection()">
+            Save to Journal
+          </button>
+          <div class="card-subtext">
+            Edits above will update the current journal entry (tap a history row to load it).
+          </div>
+          <div class="journal-history" id="journalHistory"></div>
+        </div>
+      </section>
+
+      <!-- === HABIT TRACKER SCREEN === -->
+      <!-- CHANGE NOTE: Labeled habit tracker for quick streak logic UI edits. -->
+      <!-- HABIT -->
+      <section id="screen-habit" class="hidden">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">🔁</span>
+              Glow-Up Habit
+            </div>
+          </div>
+
+          <label for="habitNameInput">Habit name</label>
+          <input
+            type="text"
+            id="habitNameInput"
+            placeholder="e.g. Night journaling, 10-min walk…"
+          />
+
+          <button class="btn btn-primary" onclick="addHabit()">
+            Add Habit (max 10)
+          </button>
+
+          <div class="card-subtext">
+            Track up to 10 habits. Each habit has 3 “freeze” tokens to protect
+            your streak when you miss a day.
+          </div>
+        </div>
+
+          <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">🔥</span>
+              Glow-Up Streaks
+            </div>
+          </div>
+
+          <div id="habitList" class="habit-list">
+            <p class="streak-label">No habits yet. Add one above.</p>
+          </div>
+
+          <div class="card-subtext">
+            Tap “Mark today” on each habit. Missing a day spends a freeze (3
+            total) to keep your streak; after freezes are gone, streak resets.
+          </div>
+          <button class="btn btn-primary" onclick="saveTodayHabitsToJournal()">
+            Save to Journal
+          </button>
+          <button class="btn btn-ghost" type="button" onclick="openHabitManager()">
+            Manage Streaks
+          </button>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="screen-settings" class="hidden">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">⚙️</span>
+              Settings
+            </div>
+          </div>
+          <p class="card-main-text">
+            Theme, journal, and habit controls live here. More coming soon.
+          </p>
+          <button class="btn btn-ghost" onclick="toggleTheme()">
+            Toggle Theme
+          </button>
+          <button class="btn btn-ghost" onclick="startNewJournalEntry()">
+            New Journal Entry
+          </button>
+          <label for="settingsApiKey">OpenAI API Key</label>
+          <input
+            id="settingsApiKey"
+            type="password"
+            placeholder="sk-..."
+            autocomplete="off"
+          />
+          <button class="btn btn-primary" onclick="saveApiKey()">
+            Save API Key
+          </button>
+          <div class="card-subtext">
+            Key is stored locally in your browser. Required for AI affirmations
+            and journal reflections.
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="icon">🔐</span>
+              Access Protection
+            </div>
+          </div>
+          <label for="settingsUsername">Username</label>
+          <input id="settingsUsername" type="text" placeholder="Set a username" />
+          <label for="settingsPassword">Password</label>
+          <input
+            id="settingsPassword"
+            type="password"
+            placeholder="Set a password"
+          />
+          <button class="btn btn-primary" onclick="saveCredentials()">
+            Save Credentials
+          </button>
+          <button class="btn btn-ghost" onclick="logoutUser()">
+            Logout
+          </button>
+          <div class="card-subtext">
+            Credentials are stored locally in your browser. Keep them simple,
+            this is not a secure vault.
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Fullscreen reflection overlay -->
+  <div id="reflectionOverlay" class="reflection-overlay hidden">
+    <div class="reflection-overlay-inner">
+      <div class="overlay-header">
+        <div class="overlay-title">Reflection (fullscreen)</div>
+        <button class="btn btn-ghost" type="button" onclick="closeReflectionOverlay()">
+          Close
+        </button>
+      </div>
+      <div
+        id="reflectionOverlayContent"
+        class="reflection-overlay-body"
+        contenteditable="true"
+        aria-label="Edit your reflection in fullscreen"
+      ></div>
+      <div class="overlay-footer">
+        <button class="btn btn-primary" type="button" onclick="closeReflectionOverlay()">
+          Done
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fullscreen history overlay -->
+  <div id="historyOverlay" class="history-overlay hidden">
+    <div class="history-overlay-inner">
+      <div class="overlay-header">
+        <div class="overlay-title">Journal entries</div>
+        <button class="btn btn-ghost" type="button" onclick="closeJournalHistoryOverlay()">
+          Close
+        </button>
+      </div>
+      <div id="historyOverlayList" class="history-overlay-body"></div>
+    </div>
+  </div>
+
+  <!-- Fullscreen habit manager overlay -->
+  <div id="habitOverlay" class="history-overlay hidden">
+    <div class="history-overlay-inner">
+      <div class="overlay-header">
+        <div class="overlay-title">Manage Glow-Up Streaks</div>
+        <button class="btn btn-ghost" type="button" onclick="closeHabitManager()">
+          Close
+        </button>
+      </div>
+      <div id="habitOverlayList" class="history-overlay-body"></div>
+    </div>
+  </div>
+
+  <!-- Auth overlay -->
+  <div id="authOverlay" class="history-overlay hidden">
+    <div class="history-overlay-inner">
+      <div class="overlay-header">
+        <div class="overlay-title">Enter to Continue</div>
+        <button class="btn btn-ghost" type="button" onclick="closeAuthOverlay()">
+          Close
+        </button>
+      </div>
+      <div class="history-item">
+        <label for="authUsername">Username</label>
+        <input id="authUsername" type="text" placeholder="Your username" />
+        <label for="authPassword">Password</label>
+        <input id="authPassword" type="password" placeholder="Your password" />
+        <button class="btn btn-primary" onclick="loginUser()">
+          Unlock
+        </button>
+        <button class="btn btn-ghost" type="button" onclick="signUpUser()">
+          Create account
+        </button>
+        <div class="card-subtext">
+          Uses Supabase email/password. Set credentials in Settings and log in here.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- === BOTTOM NAVIGATION === -->
+  <!-- CHANGE NOTE: Tagging nav for easier styling/animation tweaks. -->
+  <nav>
+    <div class="nav-inner">
+      <button
+        class="nav-btn active"
+        data-screen="home"
+        onclick="showScreen('home')"
+      >
+        <span class="nav-btn-icon">🏠</span>
+        <span>Home</span>
+      </button>
+      <button
+        class="nav-btn"
+        data-screen="affirm"
+        onclick="showScreen('affirm')"
+      >
+        <span class="nav-btn-icon">✨</span>
+        <span>Affirm</span>
+      </button>
+      <button
+        class="nav-btn"
+        data-screen="journal"
+        onclick="showScreen('journal')"
+      >
+        <span class="nav-btn-icon">📓</span>
+        <span>Journal</span>
+      </button>
+      <button
+        class="nav-btn"
+        data-screen="habit"
+        onclick="showScreen('habit')"
+      >
+        <span class="nav-btn-icon">🔁</span>
+        <span>Habit</span>
+      </button>
+      <button
+        class="nav-btn"
+        data-screen="settings"
+        onclick="showScreen('settings')"
+      >
+        <span class="nav-btn-icon">⚙️</span>
+        <span>Settings</span>
+      </button>
+    </div>
+  </nav>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js"></script>
+</body>
+</html>
+
+:root {
+  --bg: #020617;
+  --bg-alt: #030712;
+  --card: rgba(15, 23, 42, 0.96);
+  --border: rgba(148, 163, 184, 0.35);
+  --cyan: #22d3ee;
+  --blue: #3b82f6;
+  --purple: #a855f7;
+  --pink: #fb7185;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --radius-lg: 24px;
+  --radius-md: 18px;
+  --shadow-soft: 0 24px 60px rgba(15, 23, 42, 0.9);
+  --layout-max: 960px;
+  --scrim: rgba(2, 6, 23, 0.82);
+}
+
+[data-theme="light"] {
+  --bg: #f7f8fb;
+  --bg-alt: #eef2ff;
+  --card: #ffffff;
+  --border: rgba(99, 102, 241, 0.2);
+  --cyan: #0ea5e9;
+  --blue: #2563eb;
+  --purple: #7c3aed;
+  --pink: #ec4899;
+  --text: #0f172a;
+  --muted: #475569;
+  --shadow-soft: 0 16px 40px rgba(99, 102, 241, 0.12);
+  --scrim: rgba(15, 23, 42, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", sans-serif;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 10% -10%, rgba(56, 189, 248, 0.28), transparent 60%),
+    radial-gradient(circle at 90% 110%, rgba(217, 70, 239, 0.3), transparent 60%),
+    radial-gradient(circle at -10% 80%, rgba(59, 130, 246, 0.25), transparent 55%),
+    #020617;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+[data-theme="light"] body {
+  background:
+    radial-gradient(circle at 10% -10%, rgba(14, 165, 233, 0.18), transparent 60%),
+    radial-gradient(circle at 90% 110%, rgba(124, 58, 237, 0.18), transparent 60%),
+    radial-gradient(circle at -10% 80%, rgba(236, 72, 153, 0.18), transparent 55%),
+    #f7f8fb;
+}
+
+.app {
+  max-width: min(var(--layout-max), 100%);
+  margin: 0 auto;
+  width: 100%;
+  padding: 16px 16px 80px;
+}
+
+/* HEADER */
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 16px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-orb {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  background:
+    conic-gradient(
+      from 120deg,
+      rgba(34, 211, 238, 0.95),
+      rgba(59, 130, 246, 0.9),
+      rgba(168, 85, 247, 0.9),
+      rgba(251, 113, 133, 0.85),
+      rgba(34, 211, 238, 0.95)
+    );
+  position: relative;
+  box-shadow:
+    0 0 0 2px rgba(15, 23, 42, 0.9),
+    0 0 24px rgba(168, 85, 247, 0.65),
+    0 0 36px rgba(59, 130, 246, 0.55);
+  overflow: hidden;
+  position: relative;
+}
+
+.logo-orb::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #ffffff, rgba(255, 255, 255, 0));
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
+
+.logo-orb::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background: conic-gradient(
+    from 0deg,
+    rgba(255, 255, 255, 0.18),
+    rgba(255, 255, 255, 0)
+  );
+  animation: spinOrbs 6s linear infinite;
+}
+
+@keyframes spinOrbs {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.logo-orb-svg {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.4));
+}
+
+.logo-title {
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.logo-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pill {
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  padding: 4px 12px;
+  color: var(--cyan);
+  background: linear-gradient(120deg, rgba(34, 211, 238, 0.18), transparent);
+}
+
+.theme-toggle {
+  margin-left: 8px;
+  padding: 6px 12px;
+}
+
+/* MAIN / CARDS */
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  position: relative;
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+.card::before {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(56, 189, 248, 0.18), transparent 60%),
+    radial-gradient(circle at 100% 100%, rgba(217, 70, 239, 0.2), transparent 60%);
+  opacity: 0.6;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+.card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.card-title .icon {
+  font-size: 18px;
+}
+
+.card-main-text {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.card-subtext {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* BUTTONS */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: none;
+  outline: none;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--cyan), var(--blue), var(--purple));
+  color: #020617;
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.9),
+    0 18px 40px rgba(37, 99, 235, 0.7);
+}
+
+.btn-ghost {
+  background: var(--bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.btn:hover {
+  opacity: 0.95;
+}
+
+.btn:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+.btn-icon {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+/* INPUTS */
+
+label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  display: block;
+}
+
+.prompt-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.prompt-row label {
+  margin-bottom: 0;
+}
+
+select,
+textarea,
+input[type="text"] {
+  width: 100%;
+  background: var(--card);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+  margin-bottom: 8px;
+  outline: none;
+}
+
+select:focus,
+textarea:focus,
+input[type="text"]:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.5);
+}
+
+textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+/* STREAK / JOURNAL */
+
+.home-streak-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.streak-count {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--cyan);
+}
+
+.streak-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.week-bar {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.week-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.3);
+}
+
+.week-dot.active {
+  background: var(--purple);
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.9);
+}
+
+.habit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.habit-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  background: var(--card);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.6);
+}
+
+.habit-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.habit-item-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.habit-item-streak {
+  font-weight: 600;
+  color: var(--cyan);
+}
+
+.habit-item-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.habit-freeze {
+  color: var(--purple);
+}
+
+.habit-item-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.journal-output p,
+.affirmations-list p {
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.journal-output {
+  min-height: 120px;
+  transition: min-height 0.2s ease, box-shadow 0.2s ease;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px;
+}
+
+.journal-output.expanded {
+  min-height: 220px;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.4), 0 12px 30px rgba(34, 211, 238, 0.15);
+}
+
+.journal-output.reading-view {
+  min-height: 260px;
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.35),
+    0 20px 40px rgba(59, 130, 246, 0.25),
+    0 0 0 8px rgba(59, 130, 246, 0.05);
+  transform: translateY(-2px);
+}
+
+.reflection-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: var(--scrim);
+  backdrop-filter: blur(18px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.reflection-overlay-inner {
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  padding: 14px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.overlay-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.overlay-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.reflection-overlay-body {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg);
+  line-height: 1.6;
+  min-height: 280px;
+}
+
+.overlay-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.history-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 998;
+  background: var(--scrim);
+  backdrop-filter: blur(18px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.history-overlay-inner {
+  width: 100%;
+  max-width: 540px;
+  max-height: 90vh;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-overlay-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  background: var(--card);
+  box-shadow: var(--shadow-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-item-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.history-item-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.history-item-snippet {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.history-item button {
+  align-self: flex-start;
+}
+
+body.no-scroll {
+  overflow: hidden;
+}
+
+.journal-history {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.journal-history-item {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* NAV */
+
+nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: min(var(--layout-max), 100%);
+  margin: 0 auto;
+  background: var(--card);
+  backdrop-filter: blur(28px);
+  border-top: 1px solid var(--border);
+  z-index: 1200;
+  pointer-events: auto;
+}
+
+.nav-inner {
+  display: flex;
+  justify-content: space-around;
+  padding: 8px 10px 10px;
+  pointer-events: auto;
+}
+
+.nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.nav-btn-icon {
+  font-size: 18px;
+}
+
+.nav-btn.active {
+  color: var(--cyan);
+}
+
+/* UTIL */
+
+.hidden {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .app {
+    padding-top: 24px;
+  }
+
+  #screen-home,
+  #screen-affirm,
+  #screen-journal,
+  #screen-habit {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    align-items: start;
+  }
+
+  .card {
+    height: 100%;
+  }
+}
